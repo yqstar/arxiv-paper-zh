@@ -1,0 +1,4 @@
+interface:
+  display_name: "arXiv 论文中文化"
+  short_description: "并行翻译 arXiv 论文并交付中英文源码与 PDF"
+  default_prompt: "Use $arxiv-paper-zh to verify and translate my intended paper, then save English and Chinese sources and PDFs under arxiv-paper/<paper-name>."
