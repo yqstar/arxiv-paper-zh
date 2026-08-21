@@ -11,7 +11,7 @@
 
 | 英文原版 | 中文译版 |
 | :---: | :---: |
-| ![EST 论文英文原版](en.jpg) | ![EST 论文中文译版](zh.jpg) |
+| ![EST 论文英文原版](assets/en.jpg) | ![EST 论文中文译版](assets/zh.jpg) |
 
 在保留论文版式、公式、引用与插图的同时，将标题、摘要、正文、章节标题和图注转换为中文。
 
@@ -49,6 +49,9 @@ arxiv-paper-zh/
 ├── .agents/
 │   └── plugins/
 │       └── marketplace.json
+├── assets/
+│   ├── en.jpg
+│   └── zh.jpg
 ├── bin/
 │   └── arxiv-paper-zh.mjs
 ├── skills/
