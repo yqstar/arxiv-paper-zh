@@ -1,6 +1,6 @@
 ---
 name: arxiv-paper-zh
-description: Verify that a requested paper name, acronym, title, authors, abstract, URL, and arXiv ID identify the intended work; then rapidly download and translate its TeX source into Chinese with balanced subagent sharding, deterministic arxiv-paper/<paper-name> artifact paths, paired English/Chinese PDFs, cached dependencies, audits, XeLaTeX compilation, and full-page visual verification. Use when a user asks to locate and translate an arXiv or LaTeX research paper into a compilable Chinese edition, especially for ambiguous acronyms or long papers requiring parallel translation.
+description: Verify that a requested paper name, acronym, title, authors, abstract, URL, and arXiv ID identify the intended work; then rapidly download and translate its TeX source into Chinese with balanced subagent sharding, deterministic artifact paths under arxiv-paper, paired English/Chinese PDFs, cached dependencies, audits, XeLaTeX compilation, and full-page visual verification. Use when a user asks to locate and translate an arXiv or LaTeX research paper into a compilable Chinese edition, especially for ambiguous acronyms or long papers requiring parallel translation.
 ---
 
 # arXiv 论文快速中文化

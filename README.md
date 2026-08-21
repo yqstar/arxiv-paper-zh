@@ -1,8 +1,25 @@
 # arxiv-paper-zh
 
+[![npm version](https://img.shields.io/npm/v/arxiv-paper-zh.svg)](https://www.npmjs.com/package/arxiv-paper-zh)
+[![license](https://img.shields.io/npm/l/arxiv-paper-zh.svg)](LICENSE)
+
 将 arXiv/LaTeX 论文快速转换为可编译的中文版本。该 Agent Skill 会先核验论文身份，再下载 TeX 源码，按内容量并行翻译，自动检查漏译与 TeX 依赖，最后使用 XeLaTeX 编译并逐页检查 PDF。
 
 方案参考了科学空间的[《让 AI 翻译一篇完整的论文》](https://spaces.ac.cn/archives/11578)，并针对 Codex、Claude Code 等 Agent Skills 兼容环境补充了并行分片、依赖缓存、自动审计和可重复构建流程。
+
+## 快速开始
+
+```bash
+npx arxiv-paper-zh@latest install --all
+```
+
+重新开启 Agent 会话，然后输入：
+
+```text
+$arxiv-paper-zh 翻译 arXiv:2507.15551
+```
+
+npm 包地址：[arxiv-paper-zh](https://www.npmjs.com/package/arxiv-paper-zh)。
 
 ## 功能
 
@@ -19,6 +36,13 @@
 
 ```text
 arxiv-paper-zh/
+├── .codex-plugin/
+│   └── plugin.json
+├── .agents/
+│   └── plugins/
+│       └── marketplace.json
+├── bin/
+│   └── arxiv-paper-zh.mjs
 ├── skills/
 │   └── arxiv-paper-zh/
 │       ├── SKILL.md
@@ -33,11 +57,14 @@ arxiv-paper-zh/
 │       └── references/
 │           └── paper-translation-packages.txt
 ├── install.sh
+├── package.json
+├── tests/
+│   └── installer.test.mjs
 ├── .gitignore
 └── README.md
 ```
 
-根目录只保存面向用户和仓库维护者的文件；`skills/arxiv-paper-zh/` 是可以被 Agent 独立加载的完整 Skill，也便于未来直接封装为 Codex 或 Claude Code 插件。
+`skills/arxiv-paper-zh/` 是可以被 Agent 独立加载的完整 Skill；根目录同时提供 Codex Plugin manifest、npm/npx 安装器和原有 Shell 安装器。
 
 ## 环境要求
 
@@ -52,12 +79,50 @@ TeX 运行时不包含在本仓库中，避免让仓库体积增加数百 MB。�
 
 ## 安装
 
-### 一键安装到 Codex 和 Claude Code
+### 使用 npm / npx（推荐）
 
-将 `<你的 GitHub 用户名>` 替换为实际用户名：
+无需先克隆仓库，可直接安装到 Codex 和 Claude Code：
 
 ```bash
-git clone https://github.com/<你的 GitHub 用户名>/arxiv-paper-zh.git
+npx arxiv-paper-zh@latest install
+```
+
+安装到 Codex、Claude Code 和通用 Agent Skills 目录：
+
+```bash
+npx arxiv-paper-zh@latest install --all
+```
+
+也可以选择单个客户端或安装到指定项目：
+
+```bash
+npx arxiv-paper-zh@latest install --codex
+npx arxiv-paper-zh@latest install --claude
+npx arxiv-paper-zh@latest install --agents
+npx arxiv-paper-zh@latest install --project /path/to/project --all
+```
+
+npm 安装器会复制完整 Skill 目录。目标已存在时默认停止；明确需要升级或替换时增加 `--force`。
+
+更新已有的 npm 安装：
+
+```bash
+npx arxiv-paper-zh@latest install --all --force
+```
+
+### 作为 Codex Plugin 安装
+
+本仓库同时是一个 Codex Plugin，并通过仓库内的 marketplace 从 npm registry 获取版本化包：
+
+```bash
+codex plugin marketplace add yqstar/arxiv-paper-zh --ref main
+codex plugin add arxiv-paper-zh@arxiv-paper-zh
+```
+
+### 从源码一键安装到 Codex 和 Claude Code
+
+```bash
+git clone https://github.com/yqstar/arxiv-paper-zh.git
 cd arxiv-paper-zh
 ./install.sh --all
 ```
@@ -135,6 +200,8 @@ Claude Code 中可直接输入自然语言，或在发现该 Skill 后使用：
 
 如果简称可能对应多篇论文，Skill 会先返回候选论文的完整标题、作者与 arXiv ID，请用户确认后再下载。
 
+安装或更新后若 Skill 没有立即出现，请重新开启 Agent 会话。
+
 ## 交付内容
 
 每次任务均按论文简称建立固定目录。例如 `paper-name=EST`：
@@ -191,12 +258,15 @@ python3 skills/arxiv-paper-zh/scripts/build_and_check.py arxiv-paper/EST/latex/p
 
 客户端不支持 subagent 时，Agent 应顺序处理分片；不影响翻译规则与构建脚本的使用。
 
-## 发布前检查
+## 开发与发布检查
 
 ```bash
-python3 -m py_compile skills/arxiv-paper-zh/scripts/*.py
+npm run check
+npm pack --dry-run
+
+# 可选的独立检查
 python3 /path/to/skill-creator/scripts/quick_validate.py skills/arxiv-paper-zh
-shellcheck install.sh   # 可选
+shellcheck install.sh
 ```
 
-发布前还应选择并添加合适的开源许可证，例如 MIT、Apache-2.0 或 GPL-3.0。
+项目采用 [MIT License](LICENSE)。

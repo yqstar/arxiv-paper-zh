@@ -1,0 +1,22 @@
+{
+  "name": "arxiv-paper-zh",
+  "interface": {
+    "displayName": "arXiv Paper ZH"
+  },
+  "plugins": [
+    {
+      "name": "arxiv-paper-zh",
+      "source": {
+        "source": "npm",
+        "package": "arxiv-paper-zh",
+        "version": "^0.1.0",
+        "registry": "https://registry.npmjs.org"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

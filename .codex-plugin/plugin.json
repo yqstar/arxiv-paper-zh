@@ -1,0 +1,33 @@
+{
+  "name": "arxiv-paper-zh",
+  "version": "0.1.0",
+  "description": "Verify and translate arXiv papers into compilable Chinese editions with paired English and Chinese PDFs.",
+  "author": {
+    "name": "AndrewYq",
+    "url": "https://github.com/yqstar"
+  },
+  "homepage": "https://github.com/yqstar/arxiv-paper-zh#readme",
+  "repository": "https://github.com/yqstar/arxiv-paper-zh",
+  "license": "MIT",
+  "keywords": [
+    "arxiv",
+    "translation",
+    "latex",
+    "chinese",
+    "agent-skill"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "arXiv 论文中文化",
+    "shortDescription": "核验并翻译 arXiv 论文，交付中英文源码与 PDF。",
+    "longDescription": "核验论文身份，下载并翻译 TeX 源码，检查依赖和漏译，最后编译并逐页核验中英文 PDF。",
+    "developerName": "AndrewYq",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/yqstar/arxiv-paper-zh",
+    "defaultPrompt": "使用 arxiv-paper-zh 核验并翻译我指定的论文，交付中英文源码与 PDF。"
+  }
+}
