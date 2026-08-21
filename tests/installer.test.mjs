@@ -21,7 +21,7 @@ test("prints help and version", () => {
 
   const version = run(["--version"]);
   assert.equal(version.status, 0);
-  assert.match(version.stdout, /^0\.1\.0\n$/);
+  assert.match(version.stdout, /^0\.1\.2\n$/);
 });
 
 test("installs all project targets without duplicating .agents", () => {
