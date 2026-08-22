@@ -7,13 +7,19 @@ import argparse
 import re
 from pathlib import Path
 
+from tex_translation_utils import is_bibliography_file, mask_bibliography
+
 
 PROSE = re.compile(r"[A-Za-z]{4,}(?:[ \t]+[A-Za-z][A-Za-z'’-]{2,}){2,}")
 COMMAND_ONLY = re.compile(r"^[ \t]*\\(?:usepackage|documentclass|input|include|addbibresource)\b")
 
 
 def tex_files(root: Path) -> list[Path]:
-    return sorted(path for path in root.rglob("*.tex") if path.is_file())
+    return sorted(
+        path
+        for path in root.rglob("*.tex")
+        if path.is_file() and not is_bibliography_file(path)
+    )
 
 
 def visible_part(line: str) -> str:
@@ -45,7 +51,8 @@ def main() -> int:
 
     hits = 0
     for path in files:
-        for number, raw in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+        text = mask_bibliography(path.read_text(encoding="utf-8", errors="replace"))
+        for number, raw in enumerate(text.splitlines(), 1):
             line = visible_part(raw)
             if not line.strip() or COMMAND_ONLY.match(line):
                 continue
