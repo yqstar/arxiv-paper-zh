@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -7,6 +7,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const CLI = fileURLToPath(new URL("../bin/arxiv-paper-zh.mjs", import.meta.url));
+const PACKAGE = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+);
 
 function run(args) {
   return spawnSync(process.execPath, [CLI, ...args], {
@@ -21,7 +24,7 @@ test("prints help and version", () => {
 
   const version = run(["--version"]);
   assert.equal(version.status, 0);
-  assert.match(version.stdout, /^0\.1\.2\n$/);
+  assert.equal(version.stdout, `${PACKAGE.version}\n`);
 });
 
 test("installs all project targets without duplicating .agents", () => {

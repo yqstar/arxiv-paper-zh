@@ -36,6 +36,7 @@ npm 包地址：[arxiv-paper-zh](https://www.npmjs.com/package/arxiv-paper-zh)�
 - 按可见英文词量均衡分片，支持多个 subagent 并行处理长论文。
 - 保留公式、数值、引用键、标签、人名、模型名、数据集名和常用缩写。
 - 翻译正文、章节标题、脚注、表头、表注和 caption。
+- 参考文献标题与条目保持原文，并在翻译分片和漏译审计中自动跳过。
 - 批量检查并安装缺失的 TeX 宏包，复用共享 TinyTeX/TeX Live 缓存。
 - 自动执行漏译审计、BibTeX/Biber 构建和引用收敛检查。
 - 使用 XeLaTeX 生成中文 PDF，并要求逐页视觉核验。
@@ -64,7 +65,8 @@ arxiv-paper-zh/
 │       │   ├── build_and_check.py
 │       │   ├── inventory_and_shard.py
 │       │   ├── prepare_output_layout.py
-│       │   └── prepare_tex_runtime.py
+│       │   ├── prepare_tex_runtime.py
+│       │   └── tex_translation_utils.py
 │       └── references/
 │           └── paper-translation-packages.txt
 ├── install.sh
@@ -237,7 +239,7 @@ arxiv-paper/EST/
 
 `paper-name` 使用用户熟悉的简短名称并保留大小写，例如 `EST`、`Onetrans`，且只能包含英文字母、数字、点、下划线和连字符。
 
-参考文献元数据默认不翻译；原图内部文字不修改，只翻译必要 caption。公式内的英文说明按“公式不变”原则保留。
+整个参考文献部分保持原文，包括标题和全部条目；`.bib`、`.bbl`、内嵌 bibliography 环境和单独的参考文献 TeX 文件均不参与翻译。正文中的文献综述仍照常翻译。原图内部文字不修改，只翻译必要 caption。公式内的英文说明按“公式不变”原则保留。
 
 ## 内置工具
 
