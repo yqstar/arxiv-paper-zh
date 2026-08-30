@@ -27,12 +27,14 @@ arxiv-paper/<paper-name>/
 python3 scripts/prepare_output_layout.py <paper-name> --root arxiv-paper
 ```
 
-以脚本输出的绝对路径为准，不另建平行交付目录。`.translation-tasks/`、渲染图和日志属于论文目录内的临时文件，不得混入最终 PDF 目录。
+以脚本输出的绝对路径为准，不另建平行交付目录。原始下载物的唯一允许路径是 `latex/source.tar`；不得另建论文根目录下的 `source/`、`source.tar` 或 `latex/source/` 作为下载、解压中转。若 arXiv 源包自身包含 `source/` 子目录，可原样保留在 `latex/paper-en/` 内。
+
+Agent 自建的下载中转、页面渲染、截图和诊断临时文件全部放在论文根目录的 `tmp/`。失败时保留它用于诊断；只有全部交付物通过最终校验后才删除。`.translation-tasks/` 位于中文源码目录，不得混入最终 PDF 目录。
 
 ## 工作流
 
 1. 从 arXiv 摘要页或 API 核验规范化 ID、完整标题、作者、摘要、版本和日期。简称不是唯一标识；候选不唯一时让用户确认。向用户明确标题、作者和 arXiv ID。
-2. 创建输出目录，将 `https://export.arxiv.org/e-print/<ID>` 保存为 `latex/source.tar` 并解压到 `latex/paper-en/`。用主 TeX 的标题、作者或 README 二次核验身份；不一致时停止。
+2. 创建输出目录，将 `https://export.arxiv.org/e-print/<ID>` 直接保存为脚本返回的 `latex/source.tar`；下载失败时删除不完整文件。直接解压到 `latex/paper-en/`，不得创建额外的 `source/` 中转目录。用主 TeX 的标题、作者或 README 二次核验身份；不一致时停止。
 3. 将英文源码内容完整复制到 `latex/paper-zh/`，不得多套一层目录；此后只修改中文副本。分别定位中英文入口文件。
 4. 先完成中文入口的 XeLaTeX/ctex 改造和模板可见字符串本地化，再生成翻译任务。通常加入 `\usepackage[UTF8,fontset=fandol]{ctex}`，移除仅适用于 pdfLaTeX 的 `inputenc` 和 T1 `fontenc`。生成任务后、合并任务前不要再编辑中文 TeX 源码，合并器会检查快照。
 5. 生成紧凑任务包。脚本包含入口文件，因此单文件论文也能按片段并行；它自动省略参考文献，并用可逆占位符保护公式、引用、URL、代码和注释：
@@ -68,8 +70,8 @@ python3 scripts/prepare_output_layout.py <paper-name> --root arxiv-paper
      arxiv-paper/<paper-name>/latex/paper-zh/main.tex --tex-bin /path/to/tex/bin
    ```
 
-9. 分别低分辨率渲染中英文 PDF 的全部页面并检查裁切、重叠、溢出、图片和页数；只对可疑页面高分辨率渲染。另用支持 CJK 的系统 PDF 引擎抽查中文字体。Poppler 缺少 CMap 时不得把空白中文误判为正常。
-10. 将英文成品复制为 `paper-en/<paper-name>-en.pdf`，中文成品复制为 `paper-zh/<paper-name>-zh.pdf`。回复列出论文身份、两套源码目录和两个 PDF 的绝对路径。
+9. 将中英文页面渲染到 `tmp/render-en/` 和 `tmp/render-zh/`，分别低分辨率检查全部页面的裁切、重叠、溢出、图片和页数；只对可疑页面高分辨率渲染。另用支持 CJK 的系统 PDF 引擎抽查中文字体。Poppler 缺少 CMap 时不得把空白中文误判为正常。
+10. 将英文成品复制为 `paper-en/<paper-name>-en.pdf`，中文成品复制为 `paper-zh/<paper-name>-zh.pdf`。最后运行 `python3 scripts/finalize_output.py arxiv-paper/<paper-name>`；它确认 `latex/source.tar`、两套源码和两个 PDF 均非空，拒绝额外的源码中转路径，并仅在校验成功后删除 `tmp/`。成功后再回复论文身份、两套源码目录和两个 PDF 的绝对路径。
 
 ## 翻译边界
 
@@ -94,8 +96,10 @@ python3 scripts/prepare_tex_runtime.py --preset \
 ## 完成标准
 
 - arXiv 元数据与源码身份两次核验通过，`latex/paper-en/` 未修改。
+- 原始下载包仅存在于非空的 `latex/source.tar`，没有 Agent 创建的 `source/` 或其他源码中转副本。
 - 中文任务全部合并，全局漏译审计已人工复核；所有可见自然语言均已翻译或明确允许保留。
 - 中英文 PDF 均构建成功，参考文献和交叉引用收敛，中文版无缺字。
 - 中英文 PDF 全部页面均已检查，中文字体经 CJK 能力正常的渲染器确认。
+- `finalize_output.py` 校验成功，论文根目录的 `tmp/` 已移除。
 
 方案参考科学空间文章[《让 AI 翻译一篇完整的论文》](https://spaces.ac.cn/archives/11578)，并结合紧凑任务包、并行 agent、依赖缓存和自动审计实现。

@@ -241,6 +241,8 @@ arxiv-paper/EST/
 - `paper-en/<paper-name>-en.pdf`：英文原版编译结果。
 - `paper-zh/<paper-name>-zh.pdf`：中文译版编译结果。
 
+原始下载物只允许保存为 `latex/source.tar`，不另建根级 `source/`、`source.tar` 或 `latex/source/` 中转路径。Agent 自建的渲染图、截图和诊断文件统一写入论文根目录的 `tmp/`；完整交付校验通过后自动删除该目录。
+
 `paper-name` 使用用户熟悉的简短名称并保留大小写，例如 `EST`、`Onetrans`，且只能包含英文字母、数字、点、下划线和连字符。
 
 整个参考文献部分保持原文，包括标题和全部条目；`.bib`、`.bbl`、内嵌 bibliography 环境和单独的参考文献 TeX 文件均不参与翻译。正文中的文献综述仍照常翻译。原图内部文字不修改，只翻译必要 caption。公式内的英文说明按“公式不变”原则保留。
@@ -266,6 +268,9 @@ python3 skills/arxiv-paper-zh/scripts/audit_tex_translation.py arxiv-paper/EST/l
 
 # 自动运行 XeLaTeX 与 BibTeX/Biber，检查构建日志
 python3 skills/arxiv-paper-zh/scripts/build_and_check.py arxiv-paper/EST/latex/paper-zh/main.tex --tex-bin /path/to/tex/bin
+
+# 校验完整交付物，并在成功后删除论文根目录的 tmp/
+python3 skills/arxiv-paper-zh/scripts/finalize_output.py arxiv-paper/EST
 ```
 
 ## 兼容性说明
