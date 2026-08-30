@@ -1,6 +1,6 @@
 {
   "name": "arxiv-paper-zh",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Verify and translate arXiv papers into compilable Chinese editions with paired English and Chinese PDFs.",
   "author": {
     "name": "AndrewYq",

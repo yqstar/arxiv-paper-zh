@@ -33,7 +33,8 @@ npm 包地址：[arxiv-paper-zh](https://www.npmjs.com/package/arxiv-paper-zh)�
 
 - 核对论文简称、标题、作者、摘要、URL 与 arXiv ID，避免翻错同名论文。
 - 按 `arxiv-paper/<paper-name>/` 统一保存原始源码、中文源码以及中英文 PDF。
-- 按可见英文词量均衡分片，支持多个 subagent 并行处理长论文。
+- 将可见英文切成紧凑任务包，公式、引用、URL、代码和注释使用可逆占位符，不再让模型重复读取整份 TeX。
+- 按词量自适应分配 worker；长论文并行、短论文自动减少 worker，单文件论文也能分片。
 - 保留公式、数值、引用键、标签、人名、模型名、数据集名和常用缩写。
 - 翻译正文、章节标题、脚注、表头、表注和 caption。
 - 参考文献标题与条目保持原文，并在翻译分片和漏译审计中自动跳过。
@@ -66,13 +67,16 @@ arxiv-paper-zh/
 │       │   ├── inventory_and_shard.py
 │       │   ├── prepare_output_layout.py
 │       │   ├── prepare_tex_runtime.py
+│       │   ├── translation_tasks.py
 │       │   └── tex_translation_utils.py
 │       └── references/
 │           └── paper-translation-packages.txt
 ├── install.sh
 ├── package.json
 ├── tests/
-│   └── installer.test.mjs
+│   ├── installer.test.mjs
+│   ├── test_bibliography_exclusion.py
+│   └── test_translation_tasks.py
 ├── .gitignore
 └── README.md
 ```
@@ -247,8 +251,12 @@ arxiv-paper/EST/
 # 创建并输出固定的论文产物路径
 python3 skills/arxiv-paper-zh/scripts/prepare_output_layout.py EST --root arxiv-paper
 
-# 统计文件并生成均衡翻译分片
-python3 skills/arxiv-paper-zh/scripts/inventory_and_shard.py arxiv-paper/EST/latex/paper-zh --entry main.tex --workers 3 --json
+# 生成紧凑翻译任务包（3 是 worker 上限，小论文会自动减少）
+python3 skills/arxiv-paper-zh/scripts/translation_tasks.py prepare arxiv-paper/EST/latex/paper-zh --entry main.tex --workers 3 --json
+
+# worker 填写各自的 worker-*.task 后，检查进度并安全合并
+python3 skills/arxiv-paper-zh/scripts/translation_tasks.py status arxiv-paper/EST/latex/paper-zh
+python3 skills/arxiv-paper-zh/scripts/translation_tasks.py apply arxiv-paper/EST/latex/paper-zh
 
 # 检查预装包和论文专用宏包
 python3 skills/arxiv-paper-zh/scripts/prepare_tex_runtime.py arxiv-paper/EST/latex/paper-zh --preset --kpsewhich /path/to/kpsewhich
@@ -269,7 +277,7 @@ python3 skills/arxiv-paper-zh/scripts/build_and_check.py arxiv-paper/EST/latex/p
 - 是否允许网络下载与安装宏包。
 - 是否提供可写文件系统和本地 XeLaTeX。
 
-客户端不支持 subagent 时，Agent 应顺序处理分片；不影响翻译规则与构建脚本的使用。
+客户端不支持 subagent 时，Agent 应顺序填写任务包。任务包仍会剔除不需要发送给模型的内容，因此同样能降低上下文开销；只是不具备并行加速。
 
 ## 开发与发布检查
 
