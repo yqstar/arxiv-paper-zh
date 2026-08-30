@@ -1,6 +1,6 @@
 {
   "name": "arxiv-paper-zh",
-  "version": "0.1.3",
+  "version": "0.2.1",
   "description": "Install the arxiv-paper-zh Agent Skill for Codex, Claude Code, and compatible agents.",
   "type": "module",
   "bin": {

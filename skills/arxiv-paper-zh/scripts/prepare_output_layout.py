@@ -29,10 +29,11 @@ def main() -> int:
         "source_archive": paper_root / "latex" / "source.tar",
         "latex_en": paper_root / "latex" / "paper-en",
         "latex_zh": paper_root / "latex" / "paper-zh",
+        "temp_root": paper_root / "tmp",
         "pdf_en": paper_root / "paper-en" / f"{name}-en.pdf",
         "pdf_zh": paper_root / "paper-zh" / f"{name}-zh.pdf",
     }
-    for key in ("latex_en", "latex_zh"):
+    for key in ("latex_en", "latex_zh", "temp_root"):
         paths[key].mkdir(parents=True, exist_ok=True)
     paths["pdf_en"].parent.mkdir(parents=True, exist_ok=True)
     paths["pdf_zh"].parent.mkdir(parents=True, exist_ok=True)
