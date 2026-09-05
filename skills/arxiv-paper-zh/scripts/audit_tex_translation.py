@@ -37,6 +37,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("root", type=Path)
     parser.add_argument("--inventory", action="store_true")
+    parser.add_argument("--details", action="store_true", help="print all suspect lines; the default shows only the first 10")
     args = parser.parse_args()
     root = args.root.resolve()
     files = tex_files(root)
@@ -61,8 +62,11 @@ def main() -> int:
                 excerpt = line.strip()
                 if len(excerpt) > 220:
                     excerpt = excerpt[:217] + "..."
-                print(f"{path.relative_to(root)}:{number}: {excerpt}")
+                if args.details or hits <= 10:
+                    print(f"{path.relative_to(root)}:{number}: {excerpt}")
     print(f"suspect_lines={hits}")
+    if not args.details and hits > 10:
+        print(f"more_suspect_lines={hits - 10}; use --details to review all")
     return 0
 
 

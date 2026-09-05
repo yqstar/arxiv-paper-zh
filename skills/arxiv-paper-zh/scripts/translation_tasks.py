@@ -4,20 +4,21 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
+from collections import Counter
 import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import re
+import shutil
 import tempfile
 from typing import Iterable, Optional
 
 from tex_translation_utils import is_bibliography_file, mask_bibliography
 
 
-VERSION = 1
+VERSION = 3
 DEFAULT_TASK_DIR = ".translation-tasks"
 INCLUDE = re.compile(r"\\(?:input|include)\s*\{([^}]+)\}")
 COMMENT = re.compile(r"(?<!\\)%[^\n]*")
@@ -70,7 +71,9 @@ PACKET_BLOCK = re.compile(
     re.MULTILINE | re.DOTALL,
 )
 
-PACKET_HEADER = """# 只在每个 TRANSLATION 区块填写简体中文译文；不要改 SOURCE 或标记行。
+PACKET_HEADER = r"""# 本文件只读。将全部 SOURCE 译为简体中文，只写指定的结果文件。
+# 结果为 JSONL，每行只有 id 和 translation 两个字符串字段，不回显原文，不加 Markdown 围栏。
+# 用 JSON 转义 LaTeX 反斜杠、双引号和换行，例如 {"id":"s123","translation":"\\section{引言}\n正文。"}。
 # 严格保留 LaTeX 结构及每个 ⟪T0000⟫ 形式的占位符；保留人名、模型名、数据集名、缩写、数值和引用键。
 """
 
@@ -234,36 +237,57 @@ def segments_for(path: Path, root: Path, chunk_words: int) -> list[dict[str, obj
     return segments
 
 
-def _allocate(
-    segments: list[dict[str, object]], requested_workers: int, min_words: int
+def _batch_segments(
+    segments: list[dict[str, object]], packet_words: int
 ) -> list[list[dict[str, object]]]:
-    total = sum(int(segment["weight"]) for segment in segments)
-    useful_workers = max(1, math.ceil(total / max(1, min_words)))
-    count = min(max(1, requested_workers), useful_workers, max(1, len(segments)))
-    groups: list[list[dict[str, object]]] = [[] for _ in range(count)]
-    totals = [0] * count
-    for segment in sorted(segments, key=lambda item: int(item["weight"]), reverse=True):
-        index = min(range(count), key=totals.__getitem__)
-        groups[index].append(segment)
-        totals[index] += int(segment["weight"])
-    for group in groups:
-        group.sort(key=lambda item: (str(item["path"]), int(item["start_line"])))
+    """Keep adjacent segments together without ever exceeding the word budget."""
+    groups: list[list[dict[str, object]]] = []
+    weight = 0
+    for segment in segments:
+        score = int(segment["weight"])
+        if score > packet_words:
+            raise SystemExit(
+                f"segment {segment['id']} at {segment['path']}:"
+                f"{segment['start_line']}-{segment['end_line']} has {score} words, "
+                f"exceeding --packet-words {packet_words}; reflow this source "
+                "before prepare or explicitly increase --packet-words"
+            )
+        if not groups or weight + score > packet_words:
+            groups.append([])
+            weight = 0
+        groups[-1].append(segment)
+        weight += score
     return groups
 
 
-def _packet_text(segments: list[dict[str, object]]) -> str:
-    parts = [PACKET_HEADER]
+def _packet_text(segments: list[dict[str, object]], result_path: str) -> str:
+    parts = [PACKET_HEADER, f"# 结果文件（与本文件同目录）：{result_path}\n"]
     for segment in segments:
         parts.extend(
             [
                 f"@@@ SEGMENT {segment['id']}\n",
                 "@@@ SOURCE\n",
                 str(segment["packet_source"]),
-                "@@@ TRANSLATION\n",
                 "@@@ END\n",
             ]
         )
     return "".join(parts)
+
+
+def _packet_summary(packet: dict[str, object]) -> dict[str, object]:
+    return {
+        "path": packet["path"],
+        "result_path": packet.get("result_path", packet["path"]),
+        "words": packet["weight"],
+        "segments": len(packet["segments"]),
+    }
+
+
+def _print_errors(errors: list[str], details: bool) -> None:
+    for error in errors if details else errors[:5]:
+        print(f"error: {error if details else error[:300]}")
+    if not details and len(errors) > 5:
+        print(f"more_errors={len(errors) - 5}; use --details")
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -289,12 +313,18 @@ def prepare(args: argparse.Namespace) -> int:
     if not _inside(task_dir, root):
         raise SystemExit(f"task directory must stay below paper root: {task_dir}")
     manifest_path = task_dir / "manifest.json"
+    if manifest_path.exists() and args.resume:
+        if args.entry:
+            existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if existing.get("entry") != str(args.entry):
+                raise SystemExit("--entry differs from the existing task; resume without changing its entry")
+        args.command = "resume"
+        return progress_command(args)
     if manifest_path.exists() and not args.force:
-        raise SystemExit(f"task manifest already exists: {manifest_path}; use --force")
-    if args.force and task_dir.is_dir():
-        for stale_packet in task_dir.glob("worker-*.task"):
-            stale_packet.unlink()
-
+        raise SystemExit(f"task manifest already exists: {manifest_path}; use --resume to continue or --force to replace")
+    journal = task_dir / ".merge" / "journal.json"
+    if journal.is_file() and json.loads(journal.read_text(encoding="utf-8")).get("phase") == "applying":
+        raise SystemExit("unfinished merge; run resume before preparing new tasks")
     if args.entry:
         entry = (root / args.entry).resolve()
         if not entry.is_file():
@@ -307,20 +337,33 @@ def prepare(args: argparse.Namespace) -> int:
     segments = [
         segment
         for path in files
-        for segment in segments_for(path, root, args.chunk_words)
+        for segment in segments_for(path, root, min(args.chunk_words, args.packet_words))
     ]
     if not segments:
         raise SystemExit(f"no translatable TeX prose found below {root}")
 
-    groups = _allocate(segments, args.workers, args.min_words_per_worker)
+    groups = _batch_segments(segments, args.packet_words)
+    total_words = sum(int(segment["weight"]) for segment in segments)
+    workers = min(args.workers, max(1, math.ceil(total_words / args.min_words_per_worker)), len(groups))
+    if args.force and task_dir.is_dir():
+        for pattern in ("worker-*.task", "packet-*.task", "packet-*.result.jsonl"):
+            for stale_packet in task_dir.glob(pattern):
+                stale_packet.unlink()
+        for name in (".checks", ".repairs", ".merge"):
+            path = task_dir / name
+            if path.is_dir():
+                shutil.rmtree(path)
     packets = []
     for index, group in enumerate(groups, 1):
-        name = f"worker-{index:02d}.task"
-        _write_atomic(task_dir / name, _packet_text(group))
+        name = f"packet-{index:04d}.task"
+        result_name = f"packet-{index:04d}.result.jsonl"
+        packet_text = _packet_text(group, result_name)
+        _write_atomic(task_dir / name, packet_text)
         packets.append(
             {
-                "worker": index,
                 "path": name,
+                "result_path": result_name,
+                "sha256": hashlib.sha256(packet_text.encode()).hexdigest(),
                 "weight": sum(int(segment["weight"]) for segment in group),
                 "segments": [str(segment["id"]) for segment in group],
             }
@@ -331,8 +374,9 @@ def prepare(args: argparse.Namespace) -> int:
     packet_source_bytes = sum(
         len(str(segment["packet_source"]).encode()) for segment in segments
     )
+    packet_bytes = sum((task_dir / str(packet["path"])).stat().st_size for packet in packets)
     reduction = (
-        round(100 * (1 - packet_source_bytes / scanned_bytes), 1)
+        round(100 * (1 - packet_bytes / scanned_bytes), 1)
         if scanned_bytes
         else 0.0
     )
@@ -340,47 +384,47 @@ def prepare(args: argparse.Namespace) -> int:
         "version": VERSION,
         "root": str(root),
         "entry": str(entry.relative_to(root)) if entry else None,
+        "source_files": {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in files},
         "packets": packets,
         "segments": segments,
         "metrics": {
             "files": len(files),
             "segments": len(segments),
-            "workers": len(groups),
-            "visible_english_words": sum(int(segment["weight"]) for segment in segments),
+            "workers": workers,
+            "packet_count": len(groups),
+            "packet_words": args.packet_words,
+            "visible_english_words": total_words,
             "scanned_bytes": scanned_bytes,
             "selected_bytes": selected_bytes,
             "packet_source_bytes": packet_source_bytes,
+            "packet_bytes": packet_bytes,
             "input_byte_reduction_percent": reduction,
         },
     }
     _write_atomic(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
-    public_packets = [
-        {
-            "worker": packet["worker"],
-            "path": packet["path"],
-            "weight": packet["weight"],
-            "segments": len(packet["segments"]),
-        }
-        for packet in packets
-    ]
     payload = {
         "task_dir": str(task_dir),
         **manifest["metrics"],
-        "packets": public_packets,
+        "packets": [_packet_summary(packet) for packet in (packets if args.details else packets[:workers])],
+        "listed_packets": len(packets) if args.details else workers,
     }
     if args.json:
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        print(json.dumps(payload, ensure_ascii=False))
     else:
         print(
-            f"prepared {len(segments)} segments for {len(groups)} worker(s); "
-            f"estimated input reduction {reduction:.1f}%"
+            f"prepared segments={len(segments)} packets={len(groups)} workers={workers} "
+            f"words={total_words} packet_words={args.packet_words}"
         )
-        for packet in packets:
-            print(f"{packet['path']}: words={packet['weight']} segments={len(packet['segments'])}")
+        print(f"task_dir={task_dir}")
+        for packet in payload["packets"]:
+            print(f"next: {packet['path']} -> {packet['result_path']} words={packet['words']}")
+        if len(packets) > payload["listed_packets"]:
+            print("more packets queued; use status for the next batch or --details for all")
     return 0
 
 
 def parse_packet(path: Path) -> dict[str, dict[str, str]]:
+    """Read legacy version-1 packets so in-progress translations remain usable."""
     text = path.read_text(encoding="utf-8")
     result: dict[str, dict[str, str]] = {}
     for match in PACKET_BLOCK.finditer(text):
@@ -394,6 +438,31 @@ def parse_packet(path: Path) -> dict[str, dict[str, str]]:
     return result
 
 
+def parse_results(path: Path) -> dict[str, dict[str, str]]:
+    results: dict[str, dict[str, str]] = {}
+    if not path.exists():
+        return results
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except ValueError as error:
+            raise ValueError(f"{path.name}:{number}: invalid JSONL; escape backslashes and newlines") from error
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"id", "translation"}
+            or not isinstance(value["id"], str)
+            or not isinstance(value["translation"], str)
+        ):
+            raise ValueError(f"{path.name}:{number}: expected only string fields id and translation")
+        segment_id = value["id"]
+        if segment_id in results:
+            raise ValueError(f"duplicate segment {segment_id} in {path.name}")
+        results[segment_id] = {"translation": value["translation"]}
+    return results
+
+
 def _load_manifest(root: Path, output: Path) -> tuple[Path, dict[str, object]]:
     task_dir = (root / output).resolve()
     if not _inside(task_dir, root):
@@ -402,56 +471,15 @@ def _load_manifest(root: Path, output: Path) -> tuple[Path, dict[str, object]]:
     if not manifest_path.is_file():
         raise SystemExit(f"task manifest does not exist: {manifest_path}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("version") != VERSION:
+    if manifest.get("version") not in (1, 2, VERSION):
         raise SystemExit(f"unsupported task manifest version: {manifest.get('version')}")
     return task_dir, manifest
 
 
-def _read_results(
-    task_dir: Path, manifest: dict[str, object]
-) -> tuple[dict[str, dict[str, str]], list[str]]:
-    results: dict[str, dict[str, str]] = {}
-    errors: list[str] = []
-    for packet in manifest["packets"]:  # type: ignore[index]
-        packet_path = task_dir / packet["path"]
-        try:
-            parsed = parse_packet(packet_path)
-        except (OSError, ValueError) as error:
-            errors.append(str(error))
-            continue
-        for segment_id, value in parsed.items():
-            if segment_id in results:
-                errors.append(f"duplicate result for {segment_id}")
-            results[segment_id] = value
-    return results, errors
+def progress_command(args: argparse.Namespace) -> int:
+    from translation_progress import dispatch
 
-
-def status(args: argparse.Namespace) -> int:
-    root = args.root.resolve()
-    task_dir, manifest = _load_manifest(root, args.output)
-    results, errors = _read_results(task_dir, manifest)
-    expected = {str(segment["id"]) for segment in manifest["segments"]}  # type: ignore[index]
-    completed = {
-        segment_id
-        for segment_id, value in results.items()
-        if value["translation"].strip()
-    }
-    missing = sorted(expected - completed)
-    payload = {
-        "segments": len(expected),
-        "completed": len(expected) - len(missing),
-        "missing": missing,
-        "errors": errors,
-    }
-    if args.json:
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
-    else:
-        print(f"completed={payload['completed']}/{payload['segments']}")
-        for error in errors:
-            print(f"error: {error}")
-        for segment_id in missing:
-            print(f"missing: {segment_id}")
-    return 0 if not missing and not errors else 1
+    return dispatch(args)
 
 
 def _restore(translation: str, protected: list[dict[str, str]]) -> str:
@@ -464,91 +492,6 @@ def _structure_signature(text: str) -> tuple[Counter[str], int, int]:
     return Counter(COMMAND.findall(text)), text.count("{"), text.count("}")
 
 
-def apply(args: argparse.Namespace) -> int:
-    root = args.root.resolve()
-    task_dir, manifest = _load_manifest(root, args.output)
-    results, errors = _read_results(task_dir, manifest)
-    replacements: defaultdict[Path, list[tuple[int, int, str]]] = defaultdict(list)
-    expected_sources = {
-        (str(segment["path"]), int(segment["start_line"]), int(segment["end_line"])): (
-            str(segment["source"]),
-            str(segment["source_sha256"]),
-        )
-        for segment in manifest["segments"]  # type: ignore[index]
-    }
-
-    for segment in manifest["segments"]:  # type: ignore[index]
-        segment_id = str(segment["id"])
-        result = results.get(segment_id)
-        if result is None:
-            errors.append(f"missing segment {segment_id}")
-            continue
-        if result["source"] != segment["packet_source"]:
-            errors.append(f"SOURCE was modified for {segment_id}")
-            continue
-        translation = result["translation"].lstrip("\n")
-        if not translation.strip():
-            errors.append(f"empty translation for {segment_id}")
-            continue
-        expected_placeholders = Counter(
-            item["placeholder"] for item in segment["protected"]
-        )
-        actual_placeholders = Counter(PLACEHOLDER.findall(translation))
-        if actual_placeholders != expected_placeholders:
-            errors.append(f"placeholder mismatch for {segment_id}")
-            continue
-        if _structure_signature(translation) != _structure_signature(
-            str(segment["packet_source"])
-        ):
-            errors.append(f"LaTeX structure mismatch for {segment_id}")
-            continue
-
-        source = str(segment["source"])
-        if source.endswith("\n"):
-            if not translation.endswith("\n"):
-                translation += "\n"
-        else:
-            translation = translation.rstrip("\n")
-        restored = _restore(translation, segment["protected"])
-        path = root / str(segment["path"])
-        replacements[path].append(
-            (int(segment["start_line"]), int(segment["end_line"]), restored)
-        )
-
-    for path, items in replacements.items():
-        text = path.read_text(encoding="utf-8", errors="replace")
-        lines = text.splitlines(keepends=True)
-        for start, end, _translation in items:
-            current = "".join(lines[start - 1 : end])
-            expected, expected_hash = expected_sources[
-                (str(path.relative_to(root)), start, end)
-            ]
-            if (
-                current != expected
-                or hashlib.sha256(current.encode()).hexdigest() != expected_hash
-            ):
-                errors.append(f"source changed since prepare: {path.relative_to(root)}:{start}-{end}")
-
-    if errors:
-        for error in errors:
-            print(f"error: {error}")
-        return 1
-    if args.check:
-        print(f"validated {sum(len(items) for items in replacements.values())} translations")
-        return 0
-
-    for path, items in replacements.items():
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
-        for start, end, translation in sorted(items, reverse=True):
-            lines[start - 1 : end] = [translation]
-        _write_atomic(path, "".join(lines))
-    print(
-        f"applied {sum(len(items) for items in replacements.values())} translations "
-        f"to {len(replacements)} file(s)"
-    )
-    return 0
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -558,23 +501,45 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--entry", type=Path)
     prepare_parser.add_argument("--workers", type=int, default=3)
     prepare_parser.add_argument("--chunk-words", type=int, default=900)
+    prepare_parser.add_argument("--packet-words", type=int, default=2000, help="maximum visible English words per packet; independent of worker count")
     prepare_parser.add_argument("--min-words-per-worker", type=int, default=1200)
     prepare_parser.add_argument("--output", type=Path, default=Path(DEFAULT_TASK_DIR))
-    prepare_parser.add_argument("--force", action="store_true")
+    restart = prepare_parser.add_mutually_exclusive_group()
+    restart.add_argument("--force", action="store_true")
+    restart.add_argument("--resume", action="store_true", help="continue existing tasks without regenerating packets")
     prepare_parser.add_argument("--json", action="store_true")
+    prepare_parser.add_argument("--details", action="store_true", help="list every packet instead of only the first worker batch")
     prepare_parser.set_defaults(handler=prepare)
 
     status_parser = subparsers.add_parser("status", help="report packet completion")
     status_parser.add_argument("root", type=Path)
     status_parser.add_argument("--output", type=Path, default=Path(DEFAULT_TASK_DIR))
     status_parser.add_argument("--json", action="store_true")
-    status_parser.set_defaults(handler=status)
+    status_parser.add_argument("--details", action="store_true", help="list all pending packets, missing segments and errors")
+    status_parser.set_defaults(handler=progress_command)
 
     apply_parser = subparsers.add_parser("apply", help="validate and merge packet translations")
     apply_parser.add_argument("root", type=Path)
     apply_parser.add_argument("--output", type=Path, default=Path(DEFAULT_TASK_DIR))
     apply_parser.add_argument("--check", action="store_true")
-    apply_parser.set_defaults(handler=apply)
+    apply_parser.add_argument("--json", action="store_true")
+    apply_parser.add_argument("--details", action="store_true", help="show all validation errors")
+    apply_parser.set_defaults(handler=progress_command)
+    for name, help_text in (
+        ("check", "validate one finished packet and save its checkpoint"),
+        ("repair", "prepare a repair containing only failed segments, or apply its result"),
+        ("resume", "restore progress and finish an interrupted merge"),
+    ):
+        command = subparsers.add_parser(name, help=help_text)
+        command.add_argument("root", type=Path)
+        command.add_argument("--output", type=Path, default=Path(DEFAULT_TASK_DIR))
+        command.add_argument("--json", action="store_true")
+        command.add_argument("--details", action="store_true")
+        if name in ("check", "repair"):
+            command.add_argument("--packet", required=True, help="packet filename or its absolute path")
+        if name == "repair":
+            command.add_argument("--apply", action="store_true", help="validate and merge the active repair result")
+        command.set_defaults(handler=progress_command)
     return parser
 
 
@@ -585,6 +550,8 @@ def main() -> int:
         parser.error("--workers must be positive")
     if getattr(args, "chunk_words", 1) < 1:
         parser.error("--chunk-words must be positive")
+    if getattr(args, "packet_words", 1) < 1:
+        parser.error("--packet-words must be positive")
     if getattr(args, "min_words_per_worker", 1) < 1:
         parser.error("--min-words-per-worker must be positive")
     return int(args.handler(args))
