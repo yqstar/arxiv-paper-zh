@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Check or batch-install paper-translation and document-specific TeX packages."""
 from __future__ import annotations
-import argparse, os, re, shutil, subprocess
+import argparse, os, re, shutil, subprocess, tempfile
+from collections import deque
 from pathlib import Path
 
 USEPACKAGE = re.compile(r"\\usepackage(?:\[[^]]*\])?\{([^}]+)\}")
@@ -30,6 +31,7 @@ def main() -> int:
     parser.add_argument("--tlmgr")
     parser.add_argument("--preset", action="store_true", help="include the reusable paper-translation preset")
     parser.add_argument("--install", action="store_true", help="install all missing packages in one tlmgr call")
+    parser.add_argument("--verbose", action="store_true", help="print checked package names and full installer output")
     args = parser.parse_args()
     if not args.root and not args.preset: parser.error("provide root and/or --preset")
     kpsewhich = executable(args.kpsewhich, "kpsewhich")
@@ -45,11 +47,32 @@ def main() -> int:
     for package, probe in sorted(candidates.items()):
         found = (tex_bin / probe.removeprefix("bin:")).exists() if probe.startswith("bin:") else bool(subprocess.run([kpsewhich, probe], capture_output=True, text=True).stdout.strip())
         if not found: missing.append(package)
-    print(f"preset_file={PRESET}" if args.preset else "preset_file=")
-    print("checked_packages=" + " ".join(sorted(candidates)))
+    if args.verbose:
+        print(f"preset_file={PRESET}" if args.preset else "preset_file=")
+    print("checked_packages=" + (" ".join(sorted(candidates)) if args.verbose else str(len(candidates))))
     print("missing_packages=" + " ".join(missing))
     if args.install and missing:
-        return subprocess.run([executable(args.tlmgr, "tlmgr"), "install", *missing]).returncode
+        log_dir = None
+        if args.root:
+            root = args.root.resolve()
+            for directory in (root, *root.parents):
+                if directory.name in ("paper-en", "paper-zh") and directory.parent.name == "latex":
+                    log_dir = directory.parent.parent / "tmp"
+                    log_dir.mkdir(parents=True, exist_ok=True)
+                    break
+        command = [executable(args.tlmgr, "tlmgr"), "install", *missing]
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", prefix="tex-install-", suffix=".log", dir=log_dir, delete=False) as log:
+            result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT)
+            log_path = Path(log.name)
+        print(f"install_exit_code={result.returncode} install_log={log_path}")
+        if args.verbose or result.returncode:
+            with log_path.open(encoding="utf-8", errors="replace") as log:
+                if args.verbose:
+                    print(log.read(), end="")
+                else:
+                    for line in deque(log, maxlen=12):
+                        print(line.rstrip()[:240])
+        return result.returncode
     return 0
 
 if __name__ == "__main__": raise SystemExit(main())

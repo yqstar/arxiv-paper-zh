@@ -33,6 +33,8 @@ Agent 自建的下载中转、页面渲染、截图和诊断临时文件全部�
 
 ## 工作流
 
+继续同一论文时，若中文源码已有 `.translation-tasks/manifest.json`，先运行 `translation_tasks.py resume <中文源码目录> --json`，按返回的 `next_action` 继续；不要重新下载、覆盖中文副本或强制生成任务。恢复与修复命令见 [references/translation-recovery.md](references/translation-recovery.md)，仅在续跑、修复或合并中断时读取。
+
 1. 从 arXiv 摘要页或 API 核验规范化 ID、完整标题、作者、摘要、版本和日期。简称不是唯一标识；候选不唯一时让用户确认。向用户明确标题、作者和 arXiv ID。
 2. 创建输出目录，将 `https://export.arxiv.org/e-print/<ID>` 直接保存为脚本返回的 `latex/source.tar`；下载失败时删除不完整文件。直接解压到 `latex/paper-en/`，不得创建额外的 `source/` 中转目录。用主 TeX 的标题、作者或 README 二次核验身份；不一致时停止。
 3. 将英文源码内容完整复制到 `latex/paper-zh/`，不得多套一层目录；此后只修改中文副本。分别定位中英文入口文件。
@@ -42,19 +44,20 @@ Agent 自建的下载中转、页面渲染、截图和诊断临时文件全部�
    ```bash
    python3 scripts/translation_tasks.py prepare \
      arxiv-paper/<paper-name>/latex/paper-zh \
-     --entry main.tex --workers 3 --json
+     --entry main.tex --workers 3 --packet-words 2000 --json
    ```
 
-   默认 `--workers 3` 是上限；小论文会自动减少 worker，避免启动开销。只有需要改变速度/上下文折中才调整 `--chunk-words` 或 `--min-words-per-worker`。
-6. 每个 `worker-*.task` 只交给一个 worker。支持隔离上下文时使用空/最小历史，而不是复制完整会话；任务提示只需：
+   `--packet-words 2000` 限制每包的估算可见英文词数，`--chunk-words 900` 是包内片段的目标词数，均不是模型 token 数。脚本将相邻片段依次装包，任务包数可超过 worker 数；`--workers 3` 仅为同时运行的 worker 上限，小论文自动减少。单个片段超出包上限时，脚本在生成任务包前报出位置；先检查并调整该处源码换行，或明确调大包上限后重新 prepare。
+6. 每个只读 `packet-*.task` 同时只交给一个 worker，译文写入对应 `packet-*.result.jsonl`。支持隔离上下文时使用空/最小历史；任务提示只需：
 
    ```text
-   翻译 <packet> 的全部 SOURCE 区块，把译文填入对应 TRANSLATION 区块。
-   严格遵守文件头规则，只编辑该任务包，不读取或修改论文源码。
+   读取 <packet>，将全部 SOURCE 区块译为简体中文，结果写入 <result>。
+   严格遵守文件头规则；只写结果文件，不修改任务包或读取、修改论文源码。
+   结果用 JSONL，每行仅含 id 和 translation；完成后只返回结果路径和完成片段数。
    ```
 
-   Worker 不需要读取本 Skill、整篇论文或其他任务包。不同 worker 并行编辑各自任务包；不支持 subagent 时顺序处理。主 agent 同时编译英文版、检查中文依赖，但不修改已快照的中文 TeX。
-7. Worker 完成后只运行一次合并。合并器先整体校验任务完整性、占位符、LaTeX 结构和源文件哈希，任何错误都会在写文件前停止：
+   Worker 不需要读取本 Skill、完整 manifest 或其他任务包，不回显原文与译文。主 agent 按 prepare/status 返回的下一批任务调度，记录正在处理的任务，避免重复分配。每包完成后运行 `translation_tasks.py check <中文源码目录> --packet <packet> --json`，立即校验格式、ID、占位符、LaTeX 结构和源码快照，保存校验断点；失败时用 `repair` 生成仅含错误片段的修复包，修复后用 `repair --apply` 接收结果。空闲 worker 继续领取下一包，上下文过长时换用新 worker。不支持 subagent 时顺序处理。主 agent 同时编译英文版、检查中文依赖，但不修改已快照的中文 TeX。
+7. 全部任务校验通过后统一合并。合并前再次确认输入哈希，先暂存完整写入结果并记录合并日志，再替换源码；中断后由 `resume` 完成剩余写入，重复 `apply` 不会再次替换已合并的源码：
 
    ```bash
    python3 scripts/translation_tasks.py status arxiv-paper/<paper-name>/latex/paper-zh
@@ -62,15 +65,16 @@ Agent 自建的下载中转、页面渲染、截图和诊断临时文件全部�
    python3 scripts/audit_tex_translation.py arxiv-paper/<paper-name>/latex/paper-zh
    ```
 
-   `status` 未完成时只返工列出的任务；`apply` 报错时只检查对应 segment，不重新读取或重译全部论文。主 agent 必须人工复核全局审计命中。
-8. 使用原论文声明或兼容引擎编译英文源码。中文使用自动构建脚本识别 BibTeX/Biber 并完成 XeLaTeX 收敛：
+   `status` 的 `completed/validated` 计数表示通过结构校验的片段；新源码、结果或校验规则会使旧校验缓存失效。默认只输出摘要和下一批任务，完整列表用 `--details`。这些检查不判断译文语义质量，主 agent 仍须复核漏译审计；命中超过 10 条时用 `audit_tex_translation.py ... --details` 查看全部。版本 1/2 的任务仍可继续，不为格式升级重做译文。
+8. 使用构建脚本分别编译中英文入口。英文用 `--engine pdflatex`、`xelatex` 或 `lualatex` 选择论文兼容引擎；中文默认 XeLaTeX。脚本根据辅助文件识别 BibTeX/Biber，引用与辅助文件稳定后结束，最多 6 轮，未收敛则失败：
 
    ```bash
    python3 scripts/build_and_check.py \
      arxiv-paper/<paper-name>/latex/paper-zh/main.tex --tex-bin /path/to/tex/bin
    ```
 
-9. 将中英文页面渲染到 `tmp/render-en/` 和 `tmp/render-zh/`，分别低分辨率检查全部页面的裁切、重叠、溢出、图片和页数；只对可疑页面高分辨率渲染。另用支持 CJK 的系统 PDF 引擎抽查中文字体。Poppler 缺少 CMap 时不得把空白中文误判为正常。
+   同一源码、已记录依赖与成品哈希匹配时复用成功构建；正文修改但文献输入不变时可跳过文献处理器。默认返回轮数、缓存命中与耗时，完整日志保存在论文 `tmp/`；诊断时按需读取或用 `--verbose`。缓存范围、失效条件及参数见 [references/build-and-render.md](references/build-and-render.md)，进入编译或页面检查时读取。
+9. 用 `render_pdf.py <PDF> --output <论文目录>/tmp/render-zh --json` 渲染中文版，英文改用 `tmp/render-en`。默认以 90 DPI 渲染全部页面；使用返回的 `render_dir` 检查全部页面的裁切、重叠、溢出、图片和页数，不混用旧目录。PDF、DPI 或渲染器变化时使用独立缓存，图片缺失或哈希不符时只补对应页面。可疑页用 `--dpi 180 --pages 2,5-6` 单独渲染。图片缓存不代表已完成视觉检查；另用支持 CJK 的系统 PDF 引擎抽查中文字体。Poppler 缺少 CMap 时不得把空白中文误判为正常；修复字体/CMap 后加 `--force` 重渲染并复查。
 10. 将英文成品复制为 `paper-en/<paper-name>-en.pdf`，中文成品复制为 `paper-zh/<paper-name>-zh.pdf`。最后运行 `python3 scripts/finalize_output.py arxiv-paper/<paper-name>`；它确认 `latex/source.tar`、两套源码和两个 PDF 均非空，拒绝额外的源码中转路径，并仅在校验成功后删除 `tmp/`。成功后再回复论文身份、两套源码目录和两个 PDF 的绝对路径。
 
 ## 翻译边界
@@ -91,7 +95,7 @@ python3 scripts/prepare_tex_runtime.py --preset \
   --tlmgr <shared-tex-root>/bin/<platform>/tlmgr --install
 ```
 
-后续先离线检查；论文特有依赖缺失时再用同一脚本和一次 `tlmgr` 调用批量补装。只有没有可用运行时时才在可写缓存目录建立便携 TinyTeX，不使用 `sudo`。
+后续先离线检查；论文特有依赖缺失时再用同一脚本和一次 `tlmgr` 调用批量补装。默认只输出检查数量、缺包名称和安装结果，安装日志保留在本地；传入标准论文源码路径时放在论文 `tmp/`，仅预装共享环境时放在系统临时目录。`--verbose` 可显示完整包清单和安装输出。只有没有可用运行时时才在可写缓存目录建立便携 TinyTeX，不使用 `sudo`。
 
 ## 完成标准
 
